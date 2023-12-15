@@ -25,6 +25,11 @@ volatile unsigned char *myUDR0   = (unsigned char *)0x00C6;
 #define BLUE 53   
 #define DHT_SENSOR_TYPE DHT_TYPE_11
 
+
+// stuff for water level sensor
+#define waterPower 7
+#define waterPin A0
+
 // Char array for days of the week
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
@@ -139,6 +144,9 @@ void setup( )
   pinMode(inPin, INPUT);
   pinMode(outPin, OUTPUT);
 
+  pinMode(waterPower, OUTPUT);
+  digitalWrite(waterPower, LOW);
+
   //error messages for RTC
  if (!rtc.begin()) {
    Serial.println("Couldn't find RTC");
@@ -151,6 +159,7 @@ void setup( )
 
 void loop( )
 {  
+  int waterLevel = readWaterSensor();
   float temp;
   float Humidity;
   reading = digitalRead(inPin);
@@ -386,4 +395,12 @@ void timeStamp(){
   Serial.print(now.second(), DEC);
   Serial.println();
   delay(3000); 
+}
+
+int readWaterSensor() {
+	digitalWrite(waterPower, HIGH);	// Turn the sensor ON
+	delay(10);							// wait 10 milliseconds
+	int val = analogRead(waterPin);		// Read the analog value form sensor
+	digitalWrite(waterPower, LOW);		// Turn the sensor OFF
+	return val;							// send current reading
 }
