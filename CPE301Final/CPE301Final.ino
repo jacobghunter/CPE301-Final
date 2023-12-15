@@ -32,7 +32,7 @@ char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursd
 RTC_DS1307 rtc;
 const int A = 0b00000010; 
 const int totalSteps = 2000;
-Stepper stepper(totalSteps, 8, 10, 9, 11); // first entry is how many steps for full rev, rest are pins
+Stepper stepper(totalSteps, 4, 6, 5, 7); // first entry is how many steps for full rev, rest are pins
 
 //integer variables for LEDs
 int redval = 255;
@@ -53,7 +53,7 @@ int ReadingVal = 0;
 char printBuffer[128];
 
 //numbers of the interface pins
-LiquidCrystal lcd(7, 8, 9, 10, 11, 12);  //RS,E,D4,D5,D6,D7
+LiquidCrystal lcd(8, 9, 10, 11, 12, 13);  //RS,E,D4,D5,D6,D7
 
 static const int DHT_SENSOR_PIN = 2; //pin two for temp sensor
 //fan
@@ -126,12 +126,12 @@ void setup( )
  
   *port_l |= B00000001;//setting yellow to high
 
- //DC motor setup
- //Set PE5 to output
+  //DC motor setup
+  //Set PE5 to output
   *ddr_e |= 0x20;
-//set PE3 to output
+  //set PE3 to output
   *ddr_e |= 0x08;
-//set PG5 to output
+  //set PG5 to output
   *ddr_g |= 0x20;
 
   stepper.setSpeed(15);
