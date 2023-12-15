@@ -27,8 +27,14 @@ volatile unsigned char *myUDR0   = (unsigned char *)0x00C6;
 
 
 // stuff for water level sensor
-#define waterPower 7
+#define waterPower 3
 #define waterPin A0
+
+// fan pins and speed
+int speedPin=49;
+int dir1=51;
+int dir2=53;
+int mSpeed=90;
 
 // Char array for days of the week
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
@@ -144,6 +150,11 @@ void setup( )
   pinMode(inPin, INPUT);
   pinMode(outPin, OUTPUT);
 
+  // setting up fan pins
+  pinMode(speedPin,OUTPUT);
+  pinMode(dir1,OUTPUT);
+  pinMode(dir2,OUTPUT);
+
   pinMode(waterPower, OUTPUT);
   digitalWrite(waterPower, LOW);
 
@@ -160,6 +171,33 @@ void setup( )
 void loop( )
 {  
   int waterLevel = readWaterSensor();
+  if (state == 0) {
+    // turn yellow LED on
+    // ISR for button monitoring
+  } else {
+    // update LCD screen with temp and humidity
+    // if button pressed - set state to 0
+    if (state == 1) {
+      // record time stamp
+      // turn green LED on
+      if (waterLevel < 50) {
+        state = 2; // error state
+      }
+    } else if (state == 2) {
+      runFan(0); // turn off fan motor
+      // if button pressed and waterLevel > 50 -> state = 1
+      // send error message to LCD
+      // turn red LED on
+    } else if (state == 3) {
+      runFan(255); // turn on fan motor
+      // if temp < threshold -> state = 1
+      if (waterLevel < 50) {
+        state = 2; // error state
+      }
+      // turn on blue LED
+    }
+  }
+  
   float temp;
   float Humidity;
   reading = digitalRead(inPin);
@@ -229,6 +267,15 @@ void loop( )
     *port_b &= B11111011;//write a 0 to green LED
       
     }
+}
+
+void runFan(int speed) {
+  // make fan do thing:
+  digitalWrite(dir1, LOW);
+  digitalWrite(dir2, HIGH);
+  analogWrite(speedPin, speed);
+  delay(25);
+  analogWrite(speedPin, mSpeed);
 }
 
 // Initialize UART communication
