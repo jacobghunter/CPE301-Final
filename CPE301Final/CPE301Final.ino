@@ -1,14 +1,36 @@
-#include <dht_nonblocking.h>
-#include <Adafruit_Sensor.h>
-#include <LiquidCrystal.h>
-#include <DHT.h>
-#include <DHT_U.h>
-#include <Wire.h>
-#include "RTClib.h"
-#include <SPI.h>
-#include <Stepper.h>
+#include <dht.h> // for temp sensor
+#include <LiquidCrystal.h> // for lcd display
+#include <RTClib.h> // for time stuff
+#include <Stepper.h> // for stepper motor
 
-//used to set up serial port (Serial.begin())
+// Pins for LEDs
+#define RED 47
+#define YELLOW 53
+#define GREEN 51 
+#define BLUE 49  
+// define pins for temp sensor and button
+#define BUTTON_PIN 2
+#define STEPBUTTON_PIN 3
+#define DHT11_PIN 52
+#define waterPin A15
+
+// fan pins and speed
+int speedPin=7;
+int dir1=6;
+int dir2=5;
+int mSpeed=90;
+
+// Real-time clock and stepper objects
+RTC_DS1307 rtc;
+const int totalSteps = 2038;
+Stepper stepper(totalSteps, 8, 10, 9, 11); // first entry is how many steps for full rev, rest are pins
+
+LiquidCrystal lcd(33, 31, 29, 27, 25, 23);  //RS,E,D4,D5,D6,D7
+
+dht DHT;
+int state;
+
+// ADC stuff from lab 7
 #define RDA 0x80
 #define TBE 0x20  
 
@@ -17,73 +39,12 @@ volatile unsigned char *myUCSR0B = (unsigned char *)0x00C1;
 volatile unsigned char *myUCSR0C = (unsigned char *)0x00C2;
 volatile unsigned int  *myUBRR0  = (unsigned int *) 0x00C4;
 volatile unsigned char *myUDR0   = (unsigned char *)0x00C6;
-
-// Pins for LEDs
-#define RED 47 
-#define YELLOW 49 
-#define GREEN 51 
-#define BLUE 53   
-#define DHT_SENSOR_TYPE DHT_TYPE_11
-
-
-// stuff for water level sensor
-#define waterPower 3
-#define waterPin A0
-
-// fan pins and speed
-int speedPin=49;
-int dir1=51;
-int dir2=53;
-int mSpeed=90;
-
-// Char array for days of the week
-char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-
-// Real-time clock and stepper objects
-RTC_DS1307 rtc;
-const int A = 0b00000010; 
-const int totalSteps = 2000;
-Stepper stepper(totalSteps, 4, 6, 5, 7); // first entry is how many steps for full rev, rest are pins
-
-//integer variables for LEDs
-int redval = 255;
-int greenval = 255;
-int blueval = 255;
-int yellowval = 255;
-
-//ADC Register Pointers
+ 
 volatile unsigned char* my_ADMUX = (unsigned char*) 0x7C;
 volatile unsigned char* my_ADCSRB = (unsigned char*) 0x7B;
 volatile unsigned char* my_ADCSRA = (unsigned char*) 0x7A;
 volatile unsigned int* my_ADC_DATA = (unsigned int*) 0x78;
 
-
-//variables for water sensor code.
-int adc_id = 0;
-int ReadingVal = 0;
-char printBuffer[128];
-
-//numbers of the interface pins
-LiquidCrystal lcd(8, 9, 10, 11, 12, 13);  //RS,E,D4,D5,D6,D7
-
-static const int DHT_SENSOR_PIN = 2; //pin two for temp sensor
-//fan
-//#define WRITE_HIGH_PE(pin_num) *port_e |= (0x01 << pin_num);
-//#define WRITE_LOW_PE(pin_num) *port_e &= ~(0x01 << pin_num);
- /*
-  if(DHT_SENSOR_PIN.temperature<18)
-  {
-    state = 1;
-    WRITE_LOW_PE(3);
-  }
-  if(DHT_SENSOR_PIN.temperature>18 && state!=2)
-  {
-    state = 3;
-    WRITE_HIGH_PE(3);
-  }*/
-
-// DHT non-blocking sensor setup
-DHT_nonblocking dht_sensor( DHT_SENSOR_PIN, DHT_SENSOR_TYPE );
 
 //port E pointers
 volatile unsigned char* port_e = (unsigned char*) 0x2E;
@@ -106,222 +67,132 @@ volatile unsigned char* port_g = (unsigned char*) 0x34;
 volatile unsigned char* ddr_g = (unsigned char*) 0x33;
 volatile unsigned char* pin_g = (unsigned char*) 0x32;
 
-//channel_selector
-// Pins for button and button state variables
-int inPin = 52;         //input pin for button
-int outPin = 50;       //output pin for button
-int state = LOW;      //state of the output pin
-int reading;           //reading from the input pin
-int previous = HIGH;    //reading from the input pin
-long time = 0;         //last time the output pin was toggled
-long debounce = 200;   //debounce time
+//port H pointers
+volatile unsigned char* port_h= (unsigned char*) 0x102; 
+volatile unsigned char* ddr_h = (unsigned char*) 0x101;
+volatile unsigned char* pin_h = (unsigned char*) 0x100;
 
-void setup( )
-{
-  U0init(9600);//// Serial communication setup
-  adc_init(); //initialize water and stepper controls
+// port K pointers
+volatile unsigned char* port_k = (unsigned char*) 0x108; 
+volatile unsigned char* ddr_k = (unsigned char*) 0x107;
+volatile unsigned char* pin_k = (unsigned char*) 0x106;
+
+void setup() {
+  // more adc stuff from lab 7
+  U0init(9600);
+  adc_init(); 
+
+  state = 0;
+
+  // stepper motor
+  *ddr_b |= (0x01<<5); // pinMode(11, OUTPUT); 
+  *ddr_b |= (0x01<<4); // pinMode(10, OUTPUT);
+  *ddr_h |= (0x01<<6); // pinMode(9, OUTPUT);
+  *ddr_h |= (0x01<<5); // pinMode(8, OUTPUT);
+
+  // dc motor with fan
+  *ddr_h |= (0x01<<4); // pinMode(speedPin,OUTPUT);
+  *ddr_h |= (0x01<<3); // pinMode(dir1,OUTPUT);
+  *ddr_e |= (0x01<<3); // pinMode(dir2,OUTPUT);
+
+  // LEDs
+  *ddr_b |= (0x01<<0); // pinMode(53, OUTPUT);
+  *ddr_b |= (0x01<<2); // pinMode(51, OUTPUT);
+  *ddr_l |= (0x01<<0); // pinMode(49, OUTPUT);
+  *ddr_l |= (0x01<<2); // pinMode(47, OUTPUT);
   
+  // water sensor
+  *ddr_k &= ~(0x01<<7); // pinMode(A15, INPUT);
+
   // set up the LCD's number of columns and rows:
   lcd.begin(16, 2);
 
-  //setting pins to output
-  *ddr_l |= B00000100;//red
-  
-  *ddr_b |= B00000100;//green
-  
-  *ddr_b |= B00000001;//blue
-  
-  *ddr_l |= B00000001;//yellow
-  
-  *ddr_l &= B11111011;//setting red to low
- 
-  *port_l |= B00000001;//setting yellow to high
+  // button interrupt setup
+  *ddr_e &= ~(0x01<<4); 
+  *port_e |= (0x01<<4);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonChangeState, RISING);
 
-  //DC motor setup
-  //Set PE5 to output
-  *ddr_e |= 0x20;
-  //set PE3 to output
-  *ddr_e |= 0x08;
-  //set PG5 to output
-  *ddr_g |= 0x20;
+  *ddr_e &= ~(0x01<<5); // stepbutton
 
   stepper.setSpeed(15);
-
-  pinMode(inPin, INPUT);
-  pinMode(outPin, OUTPUT);
-
-  // setting up fan pins
-  pinMode(speedPin,OUTPUT);
-  pinMode(dir1,OUTPUT);
-  pinMode(dir2,OUTPUT);
-
-  pinMode(waterPower, OUTPUT);
-  digitalWrite(waterPower, LOW);
-
-  //error messages for RTC
- if (!rtc.begin()) {
-   Serial.println("Couldn't find RTC");
-   while (1);
- }
- if (!rtc.isrunning()) {
-   Serial.println("RTC is NOT running!");
- }
 }
 
-void loop( )
-{  
-  int waterLevel = readWaterSensor();
-  if (state == 0) {
-    // turn yellow LED on
-    // ISR for button monitoring
+int steps = totalSteps/16; // segment stepper steps into 16
+
+void loop() {  
+  int chk = DHT.read11(DHT11_PIN);
+  int waterLevel = adc_read(waterPin);
+  if (state == 0) { // disabled state
+
+    // allows for adjusting of vent position
+    if (steps < 0) {
+      steps = totalSteps/16 * -1;
+    } else {
+      steps = totalSteps/16;
+    }
+    
+    if (*pin_e & (0x01<<5)) { // if pin 3 (stepper button) is high
+      steps *= -1;
+    }
+
+    runFan(0);
+    clearLED();
+    *port_b |= (0x01<<0); // digitalWrite(YELLOW, HIGH);
+
   } else {
-    // update LCD screen with temp and humidity
-    // if button pressed - set state to 0
     if (state == 1) {
-      // record time stamp
-      // turn green LED on
+      updateLCD();
+      if (*pin_e & (0x01<<5)) {
+        steps *= -1;
+      }
+      runFan(0);
+      
+      timeStamp();
+      clearLED();
+      *port_b |= (0x01<<2); // turn on green LED
       if (waterLevel < 50) {
         state = 2; // error state
+      }
+      if (DHT.temperature > 22) {
+        state = 3;
       }
     } else if (state == 2) {
-      runFan(0); // turn off fan motor
-      // if button pressed and waterLevel > 50 -> state = 1
-      // send error message to LCD
-      // turn red LED on
+            steps = 0;
+
+      lcd.clear();
+      lcd.print("Error");
+      runFan(0);
+      clearLED();
+      *port_l |= (0x01<<2); // turn on red LED
     } else if (state == 3) {
       runFan(255); // turn on fan motor
-      // if temp < threshold -> state = 1
+      updateLCD();
+      
+      if (*pin_e & (0x01<<5)) {
+        steps *= -1;
+      }
+      if (DHT.temperature <= 22) {
+        state = 1; //send to idle
+      }
       if (waterLevel < 50) {
         state = 2; // error state
       }
-      // turn on blue LED
+      clearLED();
+      *port_l |= (0x01<<0); // turn on blue LED
     }
   }
-  
-  float temp;
-  float Humidity;
-  reading = digitalRead(inPin);
-
-  if (reading == HIGH && previous == LOW && millis() - time > debounce) {
-    if (state == HIGH){
-      state = LOW;
-      Serial.print("OFF\n");
-    }
-    else{
-      Serial.print("ON\n");
-      state = HIGH;
-    }
-    time = millis();    
-  }
-
-  digitalWrite(outPin, state);
-
-  previous = reading;
-
-  if(state == HIGH){
-  if( measure_environment( &temp, &Humidity ) == true )
-  {
-    timeStamp();
-    Serial.print( "Temperature: " );
-    float temp1 = temp * 1.8;
-    float temp2 = temp1 + 32; //conversion from C to F
-    temp = temp2;
-    Serial.print(temp, 1);
-    Serial.print("\n");
-    Serial.print( "deg. F, Humidity = " );
-    Serial.print(Humidity, 1);
-    Serial.print("%\n");
-  }
-    //water sensor loop code:
-    int val = adc_read(adc_id); // get adc value
-    
-    //red LED water level low 
-    if(val < 50){ errorLED(val); }
-    
-    if(((ReadingVal>=val) && ((ReadingVal - val) > 10)) || ((ReadingVal<val) && ((val - ReadingVal) > 10)))
-    {
-      sprintf(printBuffer,"Water level is %d\n", val);
-      Serial.print(printBuffer);
-      ReadingVal = val;
-    }
-
-    //stepper loops:
   stepperLoop();
-  
-  if(temp > 0){
-    lcdScreen(temp, Humidity);
-  }
-
-    motorToggle(temp, val);
-    }
-    else if(state == LOW){
-    lcd.setCursor(0, 0);
-    lcd.print("STATUS:           ");
-    lcd.setCursor(0, 1);
-    lcd.print("IDLE...          ");
-
-    
-    *ddr_b |= B00000001; //write a 0 to blue LED
-    *ddr_l &= B11111011; //write a 0 to red LED
-    *port_l |= B00000001;  //analogWrite(YELLOW, yellowval);
-    *port_b &= B11111011;//write a 0 to green LED
-      
-    }
 }
 
 void runFan(int speed) {
-  // make fan do thing:
-  digitalWrite(dir1, LOW);
-  digitalWrite(dir2, HIGH);
-  analogWrite(speedPin, speed);
+  *port_h |= (0x01<<4); // analogWrite(speedPin, speed); this didnt work with our setup even with analogWrite so it wasnt worth fully doing
+  *port_h |= (0x01<<3); // digitalWrite(dir1, LOW);
+  *port_e |= (0x01<<3); // digitalWrite(dir2, HIGH);
   delay(25);
-  analogWrite(speedPin, mSpeed);
 }
 
-// Initialize UART communication
-void U0init(unsigned long U0baud)
-{
- unsigned long FCPU = 16000000;
- unsigned int tbaud;
- tbaud = (FCPU / 16 / U0baud - 1);
- // Same as (FCPU / (16 * U0baud)) - 1;
- *myUCSR0A = 0x20;
- *myUCSR0B = 0x18;
- *myUCSR0C = 0x06;
- *myUBRR0  = tbaud;
-}
-
-// Control DC motor and LEDs based on temperature and water level
-void motorToggle(float temp, float val){
-  if(temp > 80 && val > 50) {
-    //write a 1 to the enable bit on PE3
-    *port_e |= 0x08;
-    //analogWrite(BLUE, blueval);
-    *port_b |= B00000001;
-    //analogWrite(RED, 0); && analogWrite(YELLOW, 0);
-    *port_l &= 11111010;
-    //analogWrite(GREEN, 0);
-    *port_b &= B11111011;
-  }
-  
-  if(temp < 80){
-    *port_e &= 0x00;
-    *port_l &= B11111010;
-    *port_b &= B11111110;
-    *port_b |= B00000100; 
-  }
-
-  //writing a 0 to PG5
-  *port_g &= 0x20;
-
-  //writing a 1 to PE5
-  *port_e |= 0x20;
-
-}
-//<8
 // Display temperature and humidity on LCD screen
-void lcdScreen(float temp, float Humidity)
-{
+void lcdScreen(float temp, float Humidity) {
   // set cursor to column 0, line 1
   // line 1 is the second row
   lcd.setCursor(0, 0);
@@ -335,119 +206,113 @@ void lcdScreen(float temp, float Humidity)
   lcd.print(temp, 1);
 }
 
-// Control LEDs to indicate water level error
-void errorLED(int waterLevel){
-  *port_b &= B11111010;
-  *port_l |= B00000100;
-  //Error messages when water is too low/sensor is not on
-  lcd.setCursor(0, 0);
-  lcd.print("Error!         ");
-  lcd.setCursor(0, 1);
-  lcd.print("WATER TOO LOW!      ");
-  waterLevel = adc_read(adc_id);
-  *port_e &= 0x00;
-  delay(4000);
-  if(waterLevel < 50){
-  errorLED(waterLevel);
-  }
-}
-
-// Measure temperature and humidity using the DHT sensor
-static bool measure_environment( float *temp, float *Humidity )
-{
-  static unsigned long measurement_timestamp = millis( );
-
-  /* Measure once every four seconds. */
-  if( millis( ) - measurement_timestamp > 3000ul )
-  {
-    if( dht_sensor.measure( temp, Humidity ) == true )
-    {
-      measurement_timestamp = millis( );
-      return( true );
-    }
-  }
-
-  return( false );
-}
-
-// ADC setup
-//function for water sensor loop and stepper loop
-void adc_init()
-{
-  // setup the A register
-  *my_ADCSRA |= B10000000;
-  *my_ADCSRA &= B11110111;
-  *my_ADCSRA &= B11011111;
-  
-  // setup the B register
-  *my_ADCSRB &= B11111000;
-
-  // setup the MUX Register
-  *my_ADMUX |= (1<<REFS0);
-}
-
- // Read ADC value from a specific channel
-//second funciton for water sensor and stepper loop:
-unsigned int adc_read(unsigned int adc_channel_num)
-{
-  int channel_selector;
-  // clear the channel selection bits (MUX 4:0)
-  *my_ADMUX &= B11100000;
-
-  // clear the channel selection bits (MUX 5)
-  *my_ADCSRB &= B11110111;
-
-  //Assign correct channel using MUX 5:0
-  if (adc_channel_num < 8) {
-    *my_ADMUX |= adc_channel_num;
-  }
-  else if ((adc_channel_num > 7) && (adc_channel_num < 16)) {
-     channel_selector = (adc_channel_num - 8);
-     *my_ADCSRB |= B00001000;
-     *my_ADMUX |= channel_selector;
-  }
-
-  // set bit 6 of ADCSRA to 1 to start a conversion
-  *my_ADCSRA |= B01000000;
-  
-  // wait for the conversion to complete
-  while ((*my_ADCSRA & 0x40) != 0);
-  
-  // return the result in the ADC data register
-  return (*my_ADC_DATA & 0x03FF);
-}
-
 // Control stepper motor based on analog input
 void stepperLoop(){
-  int voltage = adc_read(A);//read voltage from POT
-  int angle = voltage/5.7;//Scale down analog input to be between 180 and 0
-  stepper.step(totalSteps/(360/angle)); // move the amount of steps needed to turn by the angle
+  stepper.setSpeed(15);
+  stepper.step(steps); // move the amount of steps needed to turn by the angle
 }
 
  // Log the time for temperature readings
-void timeStamp(){
-  //loop to log time for temp readings
+void timeStamp() {
   DateTime now = rtc.now();
-  Serial.print("\nTime: ");
-  Serial.print(now.month(), DEC);
-  Serial.print('/');
-  Serial.print(now.day(), DEC);
-  Serial.print(" ");
+  printString("\nTime: ");
+  printString((String)now.month());
+  printString("/");
+  printString((String)now.month());
+  printString(" ");
   int hour = now.hour();
   hour -= 4; //adjusting the time
-  Serial.print(hour, DEC);
-  Serial.print(':');
-  Serial.print(now.minute(), DEC);
-  Serial.print(':');
-  Serial.print(now.second(), DEC);
-  Serial.println();
-  delay(3000); 
+  printString((String)hour);
+  printString(":");
+  printString((String)now.minute());
+  printString(":");
+  printString((String)now.second());
+  printString("\n");
 }
 
-int readWaterSensor() {
-	digitalWrite(waterPower, HIGH);	// Turn the sensor ON
-	delay(10);							// wait 10 milliseconds
-	int val = analogRead(waterPin);		// Read the analog value form sensor
-	digitalWrite(waterPower, LOW);		// Turn the sensor OFF
-	return val;							// send current reading
+void updateLCD() {
+  lcd.clear();
+  lcd.print("Temp: ");
+  lcd.print(DHT.temperature);
+  lcd.setCursor(0,1);
+  lcd.print("Humidity: ");
+  lcd.print(DHT.humidity);
+}
+
+void buttonChangeState() {
+  if (state == 0) {
+    state = 1;
+  }
+  else if (state != 0) {
+    state = 0;
+  }
+}
+
+void clearLED() {
+  *port_b &= ~(0x01<<0); // digitalWrite(YELLOW, LOW)
+  *port_b &= ~(0x01<<2); // digitalWrite(GREEN, LOW);
+  *port_l &= ~(0x01<<0); // digitalWrite(BLUE, LOW);
+  *port_l &= ~(0x01<<2); // digitalWrite(RED, LOW);
+}
+
+// for printing a string using U0putchar
+void printString(String str) {
+  for (int i = 0; i < str.length(); i++) {
+    U0putchar(str[i]);
+  }
+}
+
+// All adc stuff from lab 7
+void U0init(int U0baud) {
+ unsigned long FCPU = 16000000;
+ unsigned int tbaud;
+ tbaud = (FCPU / 16 / U0baud - 1);
+ // Same as (FCPU / (16 * U0baud)) - 1;
+ *myUCSR0A = 0x20;
+ *myUCSR0B = 0x18;
+ *myUCSR0C = 0x06;
+ *myUBRR0  = tbaud;
+}
+
+void U0putchar(unsigned char U0pdata) {
+  while((*myUCSR0A & TBE)==0);
+  *myUDR0 = U0pdata;
+}
+
+void adc_init() {
+  // setup the A register
+  *my_ADCSRA |= 0b10000000; // set bit   7 to 1 to enable the ADC
+  *my_ADCSRA &= 0b11011111; // clear bit 6 to 0 to disable the ADC trigger mode
+  *my_ADCSRA &= 0b11110111; // clear bit 5 to 0 to disable the ADC interrupt
+  *my_ADCSRA &= 0b11111000; // clear bit 0-2 to 0 to set prescaler selection to slow reading
+  // setup the B register
+  *my_ADCSRB &= 0b11110111; // clear bit 3 to 0 to reset the channel and gain bits
+  *my_ADCSRB &= 0b11111000; // clear bit 2-0 to 0 to set free running mode
+  // setup the MUX Register
+  *my_ADMUX  &= 0b01111111; // clear bit 7 to 0 for AVCC analog reference
+  *my_ADMUX  |= 0b01000000; // set bit   6 to 1 for AVCC analog reference
+  *my_ADMUX  &= 0b11011111; // clear bit 5 to 0 for right adjust result
+  *my_ADMUX  &= 0b11100000; // clear bit 4-0 to 0 to reset the channel and gain bits
+}
+
+unsigned int adc_read(unsigned char adc_channel_num) {
+  // clear the channel selection bits (MUX 4:0)
+  *my_ADMUX  &= 0b11100000;
+  // clear the channel selection bits (MUX 5)
+  *my_ADCSRB &= 0b11110111;
+  // set the channel number
+  if(adc_channel_num > 7) {
+    // set the channel selection bits, but remove the most significant bit (bit 3)
+    adc_channel_num -= 8;
+    // set MUX bit 5
+    *my_ADCSRB |= 0b00001000;
+  }
+  // set the channel selection bits
+  *my_ADMUX  += adc_channel_num;
+  // set bit 6 of ADCSRA to 1 to start a conversion
+  *my_ADCSRA |= 0x40;
+  // wait for the conversion to complete
+  while((*my_ADCSRA & 0x40) != 0);
+  // return the result in the ADC data register
+  return *my_ADC_DATA;
 }
